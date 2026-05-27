@@ -46,27 +46,31 @@ User says any of:
 
 ## Responding to a feedback batch
 
-When a new batch arrives in `inbox.jsonl`:
-- Read the entry. Each comment has a stable `cf_id` and a selector pointing to the exact element/text the user commented on.
-- Edit the relevant HTML files to address each comment. Wrap each modified region with `<span data-cf-change="ch-<short-slug>">…</span>` (or add `data-cf-change` to an existing wrapping element) so the post-reload walkthrough can find the change. One anchor per change.
-- **Append** a new batch object to the end of `<dir>/feedback/history.json` (newest = last; the library walks from the end to find the latest batch). Schema:
-  ```json
-  {
-    "batch_id": "b-<timestamp-or-slug>",
-    "timestamp": "<ISO 8601>",
-    "comments": [ /* echo back the inbox comments you addressed */ ],
-    "changes": [
-      {
-        "id": "ch-<slug>",
-        "in_response_to": ["<cf_id from inbox>"],
-        "anchor": "ch-<slug>",   // must match a data-cf-change in the HTML
-        "title": "short, concrete",
-        "description": "longer prose (hidden in UI, just for the record)"
-      }
-    ]
-  }
-  ```
-- The page polls `history.json`, sees the new batch, auto-reloads (scroll position preserved), and offers the user a walkthrough of the changes. The "processing…" banner clears automatically when any `in_response_to` matches a submitted comment id.
+Each line in `inbox.jsonl` is one *batch* — a JSON object whose `comments` field is an array. The user accumulates comments in the page and clicks "Send" once; everything they've drafted lands as a single line, regardless of count. Monitor notifications carry a preview (typically the last comment in the array) plus the file path — the array itself lives in the file, so read it from there.
+
+When a new batch arrives:
+
+1. **Read the line.** `tail -1 <dir>/feedback/inbox.jsonl`, parse it, and note the size of `comments[]`. Each comment carries a stable `cf_id`. Types: `general` (page-level), `elements` (anchored by selector + `outer_html`), `text` (anchored to a quoted text selection).
+2. **Edit the HTML** to address each comment. Wrap each modified region with `<span data-cf-change="ch-<short-slug>">…</span>` (or add `data-cf-change` to an existing wrapping element). Comments may collapse into one change, or one comment may fan out into several — either is fine.
+3. **Append one batch object** to the end of `<dir>/feedback/history.json` (newest = last; the library walks from the end). Schema:
+   ```json
+   {
+     "batch_id": "b-<timestamp-or-slug>",
+     "timestamp": "<ISO 8601>",
+     "comments": [ /* echo back the inbox comments addressed in this batch */ ],
+     "changes": [
+       {
+         "id": "ch-<slug>",
+         "in_response_to": ["<cf_id>", "..."],
+         "anchor": "ch-<slug>",   // must match a data-cf-change in the HTML
+         "title": "short, concrete",
+         "description": "longer prose (hidden in UI, just for the record)"
+       }
+     ]
+   }
+   ```
+   **Contract:** every `cf_id` in `entry.comments[]` appears in at least one `in_response_to` in the batch. This is what clears the "processing…" chips — the UI matches `cf_id` against the union of `in_response_to` arrays in the latest history batch. A comment too ambiguous to act on still goes into an `in_response_to`, paired with a change whose `description` records the ambiguity; that closes the UI loop while keeping the open question visible.
+4. The page polls `history.json`, picks up the new batch, auto-reloads (scroll position preserved), and offers a walkthrough of the changes.
 
 ## On startup in a directory that already has feedback
 
@@ -121,5 +125,6 @@ Strips both tags from every `*.html`. Leaves the `feedback/` directory alone (de
 - The injected `<link>` and `<script>` reference absolute paths `/lib/feedback.css` and `/lib/feedback.js`. These resolve through `server.py`, which routes `/lib/*` to the skill's own `lib/` directory. So pages only work when opened through this server — opening the HTML file directly in a browser will silently fail to load the feedback widget (the page itself still renders).
 - `history.json` order matters: append (don't prepend). The library walks from the end to find the latest batch for the walkthrough.
 - `anchor` values must match a `data-cf-change` attribute actually present in the HTML. Typos here cause "anchor not found" warnings post-reload.
+- The `data-cf-id="el-N"` attribute on commented elements is runtime-only — the widget assigns it on page load and it won't persist through your edits. The `outer_html` snippet inside each comment is the reliable handle for finding the element.
 - The server binds to `127.0.0.1` by default (loopback only). If the user wants to view from another device on the LAN, pass `--bind 0.0.0.0` — but warn them this exposes the comment endpoint to anyone on the network.
 - POSTs to `/feedback` and `/mark-seen` are rejected if the `Origin` header names a different host. Same-origin browser requests, curl, and agent-side scripts work as before.
